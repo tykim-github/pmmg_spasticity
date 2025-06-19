@@ -171,27 +171,33 @@ void loop() {
   if (processDataFlag) {
     processDataFlag = false;
 
-    bool newData = true;
+    // 1) pMMG 읽기
     bool pmmgSuccess = (PMMG.read(8) == 0);
-    bool imu1Success = updateQuaternion(IMUSerial1, quat_imu1);
-    bool imu2Success = updateQuaternion(IMUSerial2, quat_imu2);
-    bool imu3Success = updateQuaternion(IMUSerial3, quat_imu3);
 
-    newData &= pmmgSuccess;
-    newData &= imu1Success;
-    newData &= imu2Success;
-    newData &= imu3Success;
+    if (pmmgSuccess) {
+      // 2) pMMG 성공 시 IMU pooling 트리거
+      IMUSerial1.write('*');
+      IMUSerial2.write('*');
+      IMUSerial3.write('*');
+    }
 
-    // Handle different outcomes based on sensor data
+    // 3) 각 IMU의 pooling 응답을 읽어서 quaternion 업데이트
+    bool imu1Success = readPooledQuaternion(IMUSerial1, quat_imu1);
+    bool imu2Success = readPooledQuaternion(IMUSerial2, quat_imu2);
+    bool imu3Success = readPooledQuaternion(IMUSerial3, quat_imu3);
+
+    // 4) 전체 성공 판정
+    bool newData = pmmgSuccess && imu1Success && imu2Success && imu3Success;
+
     if (!pmmgSuccess || PMMG.getPressure() * 0.001 > 150) {
       nextState = PMMG_ERROR;
       storeMsg(ERROR_PMMG_MALFUNC);
-    } else if (!imu1Success || !imu2Success || !imu3Success) {
+    } else if (!newData) {
       nextState = IMUS_ERROR;
       storeMsg(ERROR_IMUS_MALFUNC);
-    } else if (newData) {
-      myData.d_pmmg = PMMG.getPressure() * 0.001;
-      // if (currentState == LEG_ZEROING || currentState == READ_SENSORS) {
+    } else {
+      // 5) 데이터 저장·전송
+      myData.d_pmmg  = PMMG.getPressure() * 0.001;
       storeData();
       sendData_espnow();
       //}
@@ -489,6 +495,24 @@ bool updateQuaternion(HardwareSerial& serial, Quaternion& quat) {
     }
   }
   return true;
+}
+
+// '*' pooling 명령에 대한 응답을 기다려 quaternion을 읽어들임
+bool readPooledQuaternion(HardwareSerial& serial, Quaternion& quat) {
+  const unsigned long timeout_ms = 100;  // EBIMU 권장 pooling 응답 대기시간
+  unsigned long start = millis();
+  Quaternion newQ = {0,0,0,0,false};
+
+  while (millis() - start < timeout_ms) {
+    if (serial.available()) {
+      newQ = readIMUSerial(serial);
+      if (newQ.valid) {
+        quat = newQ;
+        return true;
+      }
+    }
+  }
+  return false;  // 타임아웃 시 실패
 }
 
 Quaternion readIMUSerial(HardwareSerial& serial) {
