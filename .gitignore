@@ -10,3 +10,4 @@
 # Ignore PyInstaller build directories.
 /build/
 /dist/
+/.venv/
